@@ -1,0 +1,845 @@
+From afe34249f563a841234b0026c63bb7b3fd8ed2c6 Mon Sep 17 00:00:00 2001
+From: Tyson Whitehead <twhitehead@gmail.com>
+Date: Wed, 28 May 2025 02:54:22 -0400
+Subject: [PATCH] Revert "wintrust: Use CRT allocation functions."
+
+This reverts commit 6db69d0281543a240e1dd5ec0b0b7d841dc8f4cf.
+---
+ dlls/wintrust/crypt.c         | 121 +++++++++++++++++-----------------
+ dlls/wintrust/register.c      |  48 ++++++--------
+ dlls/wintrust/softpub.c       |   4 +-
+ dlls/wintrust/wintrust_main.c | 110 ++++++++++++++++++++++---------
+ dlls/wintrust/wintrust_priv.h |   3 +
+ 5 files changed, 165 insertions(+), 121 deletions(-)
+
+diff --git a/dlls/wintrust/crypt.c b/dlls/wintrust/crypt.c
+index 3666127ed5b..81c94b61709 100644
+--- a/dlls/wintrust/crypt.c
++++ b/dlls/wintrust/crypt.c
+@@ -73,7 +73,7 @@ static HCATINFO create_catinfo(const WCHAR *filename)
+ {
+     struct catinfo *ci;
+ 
+-    if (!(ci = malloc(sizeof(*ci))))
++    if (!(ci = HeapAlloc(GetProcessHeap(), 0, sizeof(*ci))))
+     {
+         SetLastError(ERROR_OUTOFMEMORY);
+         return INVALID_HANDLE_VALUE;
+@@ -169,7 +169,7 @@ BOOL WINAPI CryptCATAdminAcquireContext2(HCATADMIN *catAdmin, const GUID *sys, c
+         return FALSE;
+     }
+ 
+-    if (!(ca = malloc(sizeof(*ca))))
++    if (!(ca = HeapAlloc(GetProcessHeap(), 0, sizeof(*ca))))
+     {
+         SetLastError(ERROR_OUTOFMEMORY);
+         return FALSE;
+@@ -229,7 +229,7 @@ HCATINFO WINAPI CryptCATAdminAddCatalog(HCATADMIN catAdmin, PWSTR catalogFile,
+     }
+ 
+     len = lstrlenW(ca->path) + lstrlenW(selectBaseName) + 2;
+-    if (!(target = malloc(len * sizeof(WCHAR))))
++    if (!(target = HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR))))
+     {
+         SetLastError(ERROR_OUTOFMEMORY);
+         return NULL;
+@@ -240,21 +240,21 @@ HCATINFO WINAPI CryptCATAdminAddCatalog(HCATADMIN catAdmin, PWSTR catalogFile,
+ 
+     if (!CopyFileW(catalogFile, target, FALSE))
+     {
+-        free(target);
++        HeapFree(GetProcessHeap(), 0, target);
+         return NULL;
+     }
+     SetFileAttributesW(target, FILE_ATTRIBUTE_SYSTEM);
+ 
+-    if (!(ci = malloc(sizeof(*ci))))
++    if (!(ci = HeapAlloc(GetProcessHeap(), 0, sizeof(*ci))))
+     {
+-        free(target);
++        HeapFree(GetProcessHeap(), 0, target);
+         SetLastError(ERROR_OUTOFMEMORY);
+         return NULL;
+     }
+     ci->magic = CATINFO_MAGIC;
+     lstrcpyW(ci->file, target);
+ 
+-    free(target);
++    HeapFree(GetProcessHeap(), 0, target);
+     return ci;
+ }
+ 
+@@ -383,7 +383,7 @@ static BOOL catadmin_calc_hash_from_filehandle(HCATADMIN catAdmin, HANDLE hFile,
+         DWORD bytes_read;
+         BYTE *buffer;
+ 
+-        if (!(buffer = malloc(4096)))
++        if (!(buffer = HeapAlloc(GetProcessHeap(), 0, 4096)))
+         {
+             SetLastError(ERROR_OUTOFMEMORY);
+             return FALSE;
+@@ -391,13 +391,13 @@ static BOOL catadmin_calc_hash_from_filehandle(HCATADMIN catAdmin, HANDLE hFile,
+         ret = CryptAcquireContextW(&prov, NULL, providerName, providerType, CRYPT_VERIFYCONTEXT);
+         if (!ret)
+         {
+-            free(buffer);
++            HeapFree(GetProcessHeap(), 0, buffer);
+             return FALSE;
+         }
+         ret = CryptCreateHash(prov, alg, 0, 0, &hash);
+         if (!ret)
+         {
+-            free(buffer);
++            HeapFree(GetProcessHeap(), 0, buffer);
+             CryptReleaseContext(prov, 0);
+             return FALSE;
+         }
+@@ -411,7 +411,7 @@ static BOOL catadmin_calc_hash_from_filehandle(HCATADMIN catAdmin, HANDLE hFile,
+         }
+         if (ret) ret = CryptGetHashParam(hash, HP_HASHVAL, pbHash, pcbHash, 0);
+ 
+-        free(buffer);
++        HeapFree(GetProcessHeap(), 0, buffer);
+         CryptDestroyHash(hash);
+         CryptReleaseContext(prov, 0);
+     }
+@@ -494,7 +494,7 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
+         WCHAR *path;
+ 
+         size = lstrlenW(ca->path) * sizeof(WCHAR) + sizeof(globW);
+-        if (!(path = malloc(size)))
++        if (!(path = HeapAlloc(GetProcessHeap(), 0, size)))
+         {
+             CryptReleaseContext(prov, 0);
+             SetLastError(ERROR_OUTOFMEMORY);
+@@ -506,7 +506,7 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
+         FindClose(ca->find);
+         ca->find = FindFirstFileW(path, &data);
+ 
+-        free(path);
++        HeapFree(GetProcessHeap(), 0, path);
+         if (ca->find == INVALID_HANDLE_VALUE)
+         {
+             CryptReleaseContext(prov, 0);
+@@ -528,7 +528,7 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
+         HANDLE hcat;
+ 
+         size = (lstrlenW(ca->path) + lstrlenW(data.cFileName) + 2) * sizeof(WCHAR);
+-        if (!(filename = malloc(size)))
++        if (!(filename = HeapAlloc(GetProcessHeap(), 0, size)))
+         {
+             SetLastError(ERROR_OUTOFMEMORY);
+             return NULL;
+@@ -562,12 +562,12 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
+                     ca->find = INVALID_HANDLE_VALUE;
+                 }
+                 ci = create_catinfo(filename);
+-                free(filename);
++                HeapFree(GetProcessHeap(), 0, filename);
+                 return ci;
+             }
+         }
+         CryptCATClose(hcat);
+-        free(filename);
++        HeapFree(GetProcessHeap(), 0, filename);
+ 
+         if (!FindNextFileW(ca->find, &data))
+         {
+@@ -611,8 +611,7 @@ BOOL WINAPI CryptCATAdminReleaseCatalogContext(HCATADMIN hCatAdmin,
+     }
+     /* Ensure compiler doesn't optimize out the assignment with 0. */
+     SecureZeroMemory(&ci->magic, sizeof(ci->magic));
+-    free(ci);
+-    return TRUE;
++    return HeapFree(GetProcessHeap(), 0, ci);
+ }
+ 
+ /***********************************************************************
+@@ -643,8 +642,7 @@ BOOL WINAPI CryptCATAdminReleaseContext(HCATADMIN hCatAdmin, DWORD dwFlags )
+     if (ca->find != INVALID_HANDLE_VALUE) FindClose(ca->find);
+     /* Ensure compiler doesn't optimize out the assignment with 0. */
+     SecureZeroMemory(&ca->magic, sizeof(ca->magic));
+-    free(ca);
+-    return TRUE;
++    return HeapFree(GetProcessHeap(), 0, ca);
+ }
+ 
+ /***********************************************************************
+@@ -684,7 +682,7 @@ BOOL WINAPI CryptCATAdminRemoveCatalog(HCATADMIN hCatAdmin, LPCWSTR pwszCatalogF
+         DWORD len;
+ 
+         len = lstrlenW(ca->path) + lstrlenW(pwszCatalogFile) + 2;
+-        if (!(target = malloc(len * sizeof(WCHAR))))
++        if (!(target = HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR))))
+         {
+             SetLastError(ERROR_OUTOFMEMORY);
+             return FALSE;
+@@ -695,7 +693,7 @@ BOOL WINAPI CryptCATAdminRemoveCatalog(HCATADMIN hCatAdmin, LPCWSTR pwszCatalogF
+ 
+         DeleteFileW(target);
+ 
+-        free(target);
++        HeapFree(GetProcessHeap(), 0, target);
+     }
+ 
+     return TRUE;
+@@ -738,13 +736,13 @@ BOOL WINAPI CryptCATClose(HANDLE hCatalog)
+         SetLastError(ERROR_INVALID_PARAMETER);
+         return FALSE;
+     }
+-    free(cc->attr);
+-    free(cc->inner);
++    HeapFree(GetProcessHeap(), 0, cc->attr);
++    HeapFree(GetProcessHeap(), 0, cc->inner);
+     CryptMsgClose(cc->msg);
+ 
+     /* Ensure compiler doesn't optimize out the assignment with 0. */
+     SecureZeroMemory(&cc->magic, sizeof(cc->magic));
+-    free(cc);
++    HeapFree(GetProcessHeap(), 0, cc);
+     return TRUE;
+ }
+ 
+@@ -856,7 +854,7 @@ CRYPTCATMEMBER * WINAPI CryptCATEnumerateMember(HANDLE hCatalog, CRYPTCATMEMBER
+     /* dumping the contents makes me think that dwReserved is the iteration number */
+     if (!member)
+     {
+-        if (!(member = malloc(sizeof(*member))))
++        if (!(member = HeapAlloc(GetProcessHeap(), 0, sizeof(*member))))
+         {
+             SetLastError(ERROR_OUTOFMEMORY);
+             return NULL;
+@@ -883,7 +881,7 @@ CRYPTCATMEMBER * WINAPI CryptCATEnumerateMember(HANDLE hCatalog, CRYPTCATMEMBER
+ 
+     member->sEncodedIndirectData.cbData = member->sEncodedMemberInfo.cbData = 0;
+     member->sEncodedIndirectData.pbData = member->sEncodedMemberInfo.pbData = NULL;
+-    free(member->pIndirectData);
++    HeapFree(GetProcessHeap(), 0, member->pIndirectData);
+     member->pIndirectData = NULL;
+ 
+     for (i = 0; i < entry->cAttribute; i++)
+@@ -905,7 +903,7 @@ CRYPTCATMEMBER * WINAPI CryptCATEnumerateMember(HANDLE hCatalog, CRYPTCATMEMBER
+ 
+             CryptDecodeObject(cc->encoding, CAT_MEMBERINFO_OBJID, attr->rgValue->pbData, attr->rgValue->cbData, 0, NULL, &size);
+ 
+-            if (!(mi = malloc(size)))
++            if (!(mi = HeapAlloc(GetProcessHeap(), 0, size)))
+             {
+                 SetLastError(ERROR_OUTOFMEMORY);
+                 goto error;
+@@ -919,11 +917,11 @@ CRYPTCATMEMBER * WINAPI CryptCATEnumerateMember(HANDLE hCatalog, CRYPTCATMEMBER
+                 RtlInitUnicodeString(&guid, mi->pwszSubjGuid);
+                 if (RtlGUIDFromString(&guid, &member->gSubjectType))
+                 {
+-                    free(mi);
++                    HeapFree(GetProcessHeap(), 0, mi);
+                     goto error;
+                 }
+             }
+-            free(mi);
++            HeapFree(GetProcessHeap(), 0, mi);
+             if (!ret) goto error;
+         }
+         else if (!strcmp(attr->pszObjId, SPC_INDIRECT_DATA_OBJID))
+@@ -935,7 +933,7 @@ CRYPTCATMEMBER * WINAPI CryptCATEnumerateMember(HANDLE hCatalog, CRYPTCATMEMBER
+ 
+             CryptDecodeObject(cc->encoding, SPC_INDIRECT_DATA_OBJID, attr->rgValue->pbData, attr->rgValue->cbData, 0, NULL, &size);
+ 
+-            if (!(member->pIndirectData = malloc(size)))
++            if (!(member->pIndirectData = HeapAlloc(GetProcessHeap(), 0, size)))
+             {
+                 SetLastError(ERROR_OUTOFMEMORY);
+                 goto error;
+@@ -954,7 +952,10 @@ CRYPTCATMEMBER * WINAPI CryptCATEnumerateMember(HANDLE hCatalog, CRYPTCATMEMBER
+         goto error;
+     }
+     size = (2 * member->pIndirectData->Digest.cbData + 1) * sizeof(WCHAR);
+-    member->pwszReferenceTag = realloc(member->pwszReferenceTag, size);
++    if (member->pwszReferenceTag)
++        member->pwszReferenceTag = HeapReAlloc(GetProcessHeap(), 0, member->pwszReferenceTag, size);
++    else
++        member->pwszReferenceTag = HeapAlloc(GetProcessHeap(), 0, size);
+ 
+     if (!member->pwszReferenceTag)
+     {
+@@ -975,9 +976,9 @@ CRYPTCATMEMBER * WINAPI CryptCATEnumerateMember(HANDLE hCatalog, CRYPTCATMEMBER
+     return member;
+ 
+ error:
+-    free(member->pIndirectData);
+-    free(member->pwszReferenceTag);
+-    free(member);
++    HeapFree(GetProcessHeap(), 0, member->pIndirectData);
++    HeapFree(GetProcessHeap(), 0, member->pwszReferenceTag);
++    HeapFree(GetProcessHeap(), 0, member);
+     return NULL;
+ }
+ 
+@@ -989,21 +990,21 @@ static CTL_INFO *decode_inner_content(HANDLE hmsg, DWORD encoding, DWORD *len)
+     CTL_INFO *inner = NULL;
+ 
+     if (!CryptMsgGetParam(hmsg, CMSG_INNER_CONTENT_TYPE_PARAM, 0, NULL, &size)) return NULL;
+-    if (!(oid = malloc(size)))
++    if (!(oid = HeapAlloc(GetProcessHeap(), 0, size)))
+     {
+         SetLastError(ERROR_OUTOFMEMORY);
+         return NULL;
+     }
+     if (!CryptMsgGetParam(hmsg, CMSG_INNER_CONTENT_TYPE_PARAM, 0, oid, &size)) goto out;
+     if (!CryptMsgGetParam(hmsg, CMSG_CONTENT_PARAM, 0, NULL, &size)) goto out;
+-    if (!(buffer = malloc(size)))
++    if (!(buffer = HeapAlloc(GetProcessHeap(), 0, size)))
+     {
+         SetLastError(ERROR_OUTOFMEMORY);
+         goto out;
+     }
+     if (!CryptMsgGetParam(hmsg, CMSG_CONTENT_PARAM, 0, buffer, &size)) goto out;
+     if (!CryptDecodeObject(encoding, oid, buffer, size, 0, NULL, &size)) goto out;
+-    if (!(inner = malloc(size)))
++    if (!(inner = HeapAlloc(GetProcessHeap(), 0, size)))
+     {
+         SetLastError(ERROR_OUTOFMEMORY);
+         goto out;
+@@ -1012,8 +1013,8 @@ static CTL_INFO *decode_inner_content(HANDLE hmsg, DWORD encoding, DWORD *len)
+     *len = size;
+ 
+ out:
+-    free(oid);
+-    free(buffer);
++    HeapFree(GetProcessHeap(), 0, oid);
++    HeapFree(GetProcessHeap(), 0, buffer);
+     return inner;
+ }
+ 
+@@ -1118,7 +1119,7 @@ HANDLE WINAPI CryptCATOpen(WCHAR *filename, DWORD flags, HCRYPTPROV hProv,
+     if (file == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
+ 
+     size = GetFileSize(file, NULL);
+-    if (!(buffer = malloc(size)))
++    if (!(buffer = HeapAlloc(GetProcessHeap(), 0, size)))
+     {
+         CloseHandle(file);
+         SetLastError(ERROR_OUTOFMEMORY);
+@@ -1127,23 +1128,23 @@ HANDLE WINAPI CryptCATOpen(WCHAR *filename, DWORD flags, HCRYPTPROV hProv,
+     if (!(hmsg = CryptMsgOpenToDecode(dwEncodingType, 0, 0, hProv, NULL, NULL)))
+     {
+         CloseHandle(file);
+-        free(buffer);
++        HeapFree(GetProcessHeap(), 0, buffer);
+         return INVALID_HANDLE_VALUE;
+     }
+     if (!size) valid = FALSE;
+     else if (!ReadFile(file, buffer, size, &size, NULL))
+     {
+         CloseHandle(file);
+-        free(buffer);
++        HeapFree(GetProcessHeap(), 0, buffer);
+         CryptMsgClose(hmsg);
+         return INVALID_HANDLE_VALUE;
+     }
+     else valid = CryptMsgUpdate(hmsg, buffer, size, TRUE);
+-    free(buffer);
++    HeapFree(GetProcessHeap(), 0, buffer);
+     CloseHandle(file);
+ 
+     size = sizeof(DWORD);
+-    if (!(cc = calloc(1, sizeof(*cc))))
++    if (!(cc = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*cc))))
+     {
+         CryptMsgClose(hmsg);
+         SetLastError(ERROR_OUTOFMEMORY);
+@@ -1168,15 +1169,15 @@ HANDLE WINAPI CryptCATOpen(WCHAR *filename, DWORD flags, HCRYPTPROV hProv,
+             if (!CryptMsgGetParam(hmsg, CMSG_ATTR_CERT_PARAM, i, NULL, &size))
+             {
+                 CryptMsgClose(hmsg);
+-                free(cc);
++                HeapFree(GetProcessHeap(), 0, cc);
+                 return INVALID_HANDLE_VALUE;
+             }
+             sum += size;
+         }
+-        if (!(cc->attr = malloc(sizeof(*cc->attr) * cc->attr_count + sum)))
++        if (!(cc->attr = HeapAlloc(GetProcessHeap(), 0, sizeof(*cc->attr) * cc->attr_count + sum)))
+         {
+             CryptMsgClose(hmsg);
+-            free(cc);
++            HeapFree(GetProcessHeap(), 0, cc);
+             SetLastError(ERROR_OUTOFMEMORY);
+             return INVALID_HANDLE_VALUE;
+         }
+@@ -1186,15 +1187,15 @@ HANDLE WINAPI CryptCATOpen(WCHAR *filename, DWORD flags, HCRYPTPROV hProv,
+             if (!CryptMsgGetParam(hmsg, CMSG_ATTR_CERT_PARAM, i, NULL, &size))
+             {
+                 CryptMsgClose(hmsg);
+-                free(cc->attr);
+-                free(cc);
++                HeapFree(GetProcessHeap(), 0, cc->attr);
++                HeapFree(GetProcessHeap(), 0, cc);
+                 return INVALID_HANDLE_VALUE;
+             }
+             if (!CryptMsgGetParam(hmsg, CMSG_ATTR_CERT_PARAM, i, p, &size))
+             {
+                 CryptMsgClose(hmsg);
+-                free(cc->attr);
+-                free(cc);
++                HeapFree(GetProcessHeap(), 0, cc->attr);
++                HeapFree(GetProcessHeap(), 0, cc);
+                 return INVALID_HANDLE_VALUE;
+             }
+             p += size;
+@@ -1203,16 +1204,16 @@ HANDLE WINAPI CryptCATOpen(WCHAR *filename, DWORD flags, HCRYPTPROV hProv,
+         if (!cc->inner || !CryptSIPRetrieveSubjectGuid(filename, NULL, &cc->subject))
+         {
+             CryptMsgClose(hmsg);
+-            free(cc->attr);
+-            free(cc->inner);
+-            free(cc);
++            HeapFree(GetProcessHeap(), 0, cc->attr);
++            HeapFree(GetProcessHeap(), 0, cc->inner);
++            HeapFree(GetProcessHeap(), 0, cc);
+             return INVALID_HANDLE_VALUE;
+         }
+         cc->magic = CRYPTCAT_MAGIC;
+         SetLastError(ERROR_SUCCESS);
+         return cc;
+     }
+-    free(cc);
++    HeapFree(GetProcessHeap(), 0, cc);
+     return INVALID_HANDLE_VALUE;
+ }
+ 
+@@ -1323,7 +1324,7 @@ static BOOL WINTRUST_GetSignedMsgFromPEFile(SIP_SUBJECTINFO *pSubjectInfo,
+         ret = ImageGetCertificateData(file, dwIndex, NULL, &len);
+         if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+             goto error;
+-        pCert = malloc(len);
++        pCert = HeapAlloc(GetProcessHeap(), 0, len);
+         if (!pCert)
+         {
+             ret = FALSE;
+@@ -1362,7 +1363,7 @@ static BOOL WINTRUST_GetSignedMsgFromPEFile(SIP_SUBJECTINFO *pSubjectInfo,
+ error:
+     if(pSubjectInfo->hFile != file)
+         CloseHandle(file);
+-    free(pCert);
++    HeapFree(GetProcessHeap(), 0, pCert);
+     return ret;
+ }
+ 
+@@ -1386,7 +1387,7 @@ static BOOL WINTRUST_PutSignedMsgToPEFile(SIP_SUBJECTINFO* pSubjectInfo, DWORD p
+ 
+     /* int aligned WIN_CERTIFICATE structure with cbSignedDataMsg+1 bytes of data */
+     size = FIELD_OFFSET(WIN_CERTIFICATE, bCertificate[cbSignedDataMsg+4]) & (~3);
+-    cert = calloc(1, size);
++    cert = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+     if(!cert)
+         return FALSE;
+ 
+@@ -1396,7 +1397,7 @@ static BOOL WINTRUST_PutSignedMsgToPEFile(SIP_SUBJECTINFO* pSubjectInfo, DWORD p
+     memcpy(cert->bCertificate, pbSignedDataMsg, cbSignedDataMsg);
+     ret = ImageAddCertificate(file, cert, pdwIndex);
+ 
+-    free(cert);
++    HeapFree(GetProcessHeap(), 0, cert);
+     if(file != pSubjectInfo->hFile)
+         CloseHandle(file);
+     return ret;
+diff --git a/dlls/wintrust/register.c b/dlls/wintrust/register.c
+index 49b8ce06175..a5025ea3da1 100644
+--- a/dlls/wintrust/register.c
++++ b/dlls/wintrust/register.c
+@@ -92,8 +92,10 @@ static void WINTRUST_InitRegStructs(void)
+ {
+ #define WINTRUST_INITREGENTRY( action, dllname, functionname ) \
+     action.cbStruct = sizeof(CRYPT_TRUST_REG_ENTRY); \
+-    action.pwszDLLName = wcsdup(dllname); \
+-    action.pwszFunctionName = wcsdup(functionname);
++    action.pwszDLLName = WINTRUST_Alloc(sizeof(dllname)); \
++    lstrcpyW(action.pwszDLLName, dllname); \
++    action.pwszFunctionName = WINTRUST_Alloc(sizeof(functionname)); \
++    lstrcpyW(action.pwszFunctionName, functionname);
+ 
+     WINTRUST_INITREGENTRY(SoftpubInitialization, SP_POLICY_PROVIDER_DLL_NAME, SP_INIT_FUNCTION)
+     WINTRUST_INITREGENTRY(SoftpubMessage, SP_POLICY_PROVIDER_DLL_NAME, SP_OBJTRUST_FUNCTION)
+@@ -126,8 +128,8 @@ static void WINTRUST_InitRegStructs(void)
+ static void WINTRUST_FreeRegStructs(void)
+ {
+ #define WINTRUST_FREEREGENTRY( action ) \
+-    free(action.pwszDLLName); \
+-    free(action.pwszFunctionName);
++    WINTRUST_Free(action.pwszDLLName); \
++    WINTRUST_Free(action.pwszFunctionName);
+ 
+     WINTRUST_FREEREGENTRY(SoftpubInitialization);
+     WINTRUST_FREEREGENTRY(SoftpubMessage);
+@@ -381,11 +383,11 @@ static LONG WINTRUST_WriteSingleUsageEntry(LPCSTR OID,
+ 
+     /* Turn OID into a wide-character string */
+     Len = MultiByteToWideChar( CP_ACP, 0, OID, -1, NULL, 0 );
+-    OIDW = malloc( Len * sizeof(WCHAR) );
++    OIDW = WINTRUST_Alloc( Len * sizeof(WCHAR) );
+     MultiByteToWideChar( CP_ACP, 0, OID, -1, OIDW, Len );
+ 
+     /* Allocate the needed space for UsageKey */
+-    UsageKey = malloc((wcslen(Trust) + wcslen(Usages) + Len) * sizeof(WCHAR));
++    UsageKey = WINTRUST_Alloc((lstrlenW(Trust) + lstrlenW(Usages) + Len) * sizeof(WCHAR));
+     /* Create the key string */
+     lstrcpyW(UsageKey, Trust);
+     lstrcatW(UsageKey, Usages);
+@@ -400,8 +402,8 @@ static LONG WINTRUST_WriteSingleUsageEntry(LPCSTR OID,
+     }
+     RegCloseKey(Key);
+ 
+-    free(OIDW);
+-    free(UsageKey);
++    WINTRUST_Free(OIDW);
++    WINTRUST_Free(UsageKey);
+ 
+     return Res;
+ }
+@@ -599,7 +601,8 @@ static BOOL WINTRUST_RegisterHttpsProv(void)
+     ProvInfo.sTestPolicyProvider        = NullCTRE; /* No diagnostic policy */
+     ProvInfo.sCleanupProvider           = SoftpubCleanup;
+ 
+-    DefUsage.pwszDllName = wcsdup(SP_POLICY_PROVIDER_DLL_NAME);
++    DefUsage.pwszDllName = WINTRUST_Alloc(sizeof(SP_POLICY_PROVIDER_DLL_NAME));
++    lstrcpyW(DefUsage.pwszDllName, SP_POLICY_PROVIDER_DLL_NAME);
+ 
+     if (!WintrustAddDefaultForUsage(szOID_PKIX_KP_SERVER_AUTH, &DefUsage))
+         RegisteredOK = FALSE;
+@@ -610,7 +613,7 @@ static BOOL WINTRUST_RegisterHttpsProv(void)
+     if (!WintrustAddDefaultForUsage(szOID_SGC_NETSCAPE, &DefUsage))
+         RegisteredOK = FALSE;
+ 
+-    free(DefUsage.pwszDllName);
++    WINTRUST_Free(DefUsage.pwszDllName);
+ 
+     if (!WintrustAddActionID(&ProvGUID, 0, &ProvInfo))
+         RegisteredOK = FALSE;
+@@ -759,26 +762,26 @@ BOOL WINAPI WintrustAddDefaultForUsage(const char *pszUsageOID,
+         WCHAR* CallbackW;
+ 
+         Len = MultiByteToWideChar( CP_ACP, 0, psDefUsage->pwszLoadCallbackDataFunctionName, -1, NULL, 0 );
+-        CallbackW = malloc( Len * sizeof(WCHAR) );
++        CallbackW = WINTRUST_Alloc( Len * sizeof(WCHAR) );
+         MultiByteToWideChar( CP_ACP, 0, psDefUsage->pwszLoadCallbackDataFunctionName, -1, CallbackW, Len );
+ 
+         Res = WINTRUST_WriteSingleUsageEntry(pszUsageOID, CBAlloc, CallbackW);
+         if (Res != ERROR_SUCCESS) WriteUsageError = Res;
+ 
+-        free(CallbackW);
++        WINTRUST_Free(CallbackW);
+     }
+     if (psDefUsage->pwszFreeCallbackDataFunctionName)
+     {
+         WCHAR* CallbackW;
+ 
+         Len = MultiByteToWideChar( CP_ACP, 0, psDefUsage->pwszFreeCallbackDataFunctionName, -1, NULL, 0 );
+-        CallbackW = malloc( Len * sizeof(WCHAR) );
++        CallbackW = WINTRUST_Alloc( Len * sizeof(WCHAR) );
+         MultiByteToWideChar( CP_ACP, 0, psDefUsage->pwszFreeCallbackDataFunctionName, -1, CallbackW, Len );
+ 
+         Res = WINTRUST_WriteSingleUsageEntry(pszUsageOID, CBFree, CallbackW);
+         if (Res != ERROR_SUCCESS) WriteUsageError = Res;
+ 
+-        free(CallbackW);
++        WINTRUST_Free(CallbackW);
+     }
+ 
+     WINTRUST_Guid2Wstr(psDefUsage->pgActionID, GuidString);
+@@ -849,16 +852,6 @@ static struct provider_cache_entry
+ *provider_cache;
+ static unsigned int provider_cache_size;
+ 
+-static void * WINAPI WINTRUST_Alloc(DWORD cb)
+-{
+-    return calloc(1, cb);
+-}
+-
+-static void WINAPI WINTRUST_Free(void *p)
+-{
+-    free(p);
+-}
+-
+ /***********************************************************************
+  *              WintrustLoadFunctionPointers (WINTRUST.@)
+  */
+@@ -958,9 +951,10 @@ static BOOL WINTRUST_SIPPAddProvider(GUID* Subject, WCHAR* MagicNumber)
+     /* Clear and initialize the structure */
+     memset(&NewProv, 0, sizeof(SIP_ADD_NEWPROVIDER));
+     NewProv.cbStruct = sizeof(SIP_ADD_NEWPROVIDER);
+-    NewProv.pwszDLLFileName = wcsdup(SP_POLICY_PROVIDER_DLL_NAME);
++    NewProv.pwszDLLFileName = WINTRUST_Alloc(sizeof(SP_POLICY_PROVIDER_DLL_NAME));
+     /* Fill the structure */
+     NewProv.pgSubject              = Subject;
++    lstrcpyW(NewProv.pwszDLLFileName, SP_POLICY_PROVIDER_DLL_NAME);
+     NewProv.pwszMagicNumber        = MagicNumber;
+     NewProv.pwszIsFunctionName     = NULL;
+     NewProv.pwszGetFuncName        = CryptSIPGetSignedDataMsg;
+@@ -973,8 +967,8 @@ static BOOL WINTRUST_SIPPAddProvider(GUID* Subject, WCHAR* MagicNumber)
+ 
+     Ret = CryptSIPAddProvider(&NewProv);
+ 
+-    free(NewProv.pwszDLLFileName);
+-
++    WINTRUST_Free(NewProv.pwszDLLFileName);
++ 
+     return Ret;
+ }
+ 
+diff --git a/dlls/wintrust/softpub.c b/dlls/wintrust/softpub.c
+index 609d240a738..2b64fd85504 100644
+--- a/dlls/wintrust/softpub.c
++++ b/dlls/wintrust/softpub.c
+@@ -213,7 +213,7 @@ static BOOL hash_file_data( HANDLE file, DWORD start, DWORD end, HCRYPTHASH hash
+ {
+     DWORD bytes_read, size = end - start;
+     DWORD buffer_size = min( size, 1024*1024 );
+-    BYTE *buffer = malloc( buffer_size );
++    BYTE *buffer = HeapAlloc( GetProcessHeap(), 0, buffer_size );
+ 
+     if (!buffer) return FALSE;
+     SetFilePointer( file, start, NULL, FILE_BEGIN );
+@@ -224,7 +224,7 @@ static BOOL hash_file_data( HANDLE file, DWORD start, DWORD end, HCRYPTHASH hash
+         if (!CryptHashData( hash, buffer, bytes_read, 0 )) break;
+         size -= bytes_read;
+     }
+-    free( buffer );
++    HeapFree( GetProcessHeap(), 0, buffer );
+     return !size;
+ }
+ 
+diff --git a/dlls/wintrust/wintrust_main.c b/dlls/wintrust/wintrust_main.c
+index 66e274a24ae..bd4ba944fa4 100644
+--- a/dlls/wintrust/wintrust_main.c
++++ b/dlls/wintrust/wintrust_main.c
+@@ -36,6 +36,24 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(wintrust);
+ 
++
++/* Utility functions */
++void * WINAPI WINTRUST_Alloc(DWORD cb)
++{
++    return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, cb);
++}
++
++static void* WINTRUST_ReAlloc(void *ptr, DWORD cb) __WINE_ALLOC_SIZE(2);
++static void* WINTRUST_ReAlloc(void *ptr, DWORD cb)
++{
++    return HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ptr, cb);
++}
++
++void WINAPI WINTRUST_Free(void *p)
++{
++    HeapFree(GetProcessHeap(), 0, p);
++}
++
+ /***********************************************************************
+  *		TrustIsCertificateSelfSigned (WINTRUST.@)
+  */
+@@ -182,22 +200,23 @@ static CRYPT_PROVIDER_DATA *WINTRUST_AllocateProviderData(void)
+ {
+     CRYPT_PROVIDER_DATA *provData;
+ 
+-    provData = calloc(1, sizeof(CRYPT_PROVIDER_DATA));
++    provData = WINTRUST_Alloc(sizeof(CRYPT_PROVIDER_DATA));
+     if (!provData)
+         goto oom;
+     provData->cbStruct = sizeof(CRYPT_PROVIDER_DATA);
+ 
+-    provData->padwTrustStepErrors = calloc(TRUSTERROR_MAX_STEPS, sizeof(DWORD));
++    provData->padwTrustStepErrors =
++     WINTRUST_Alloc(TRUSTERROR_MAX_STEPS * sizeof(DWORD));
+     if (!provData->padwTrustStepErrors)
+         goto oom;
+     provData->cdwTrustStepErrors = TRUSTERROR_MAX_STEPS;
+ 
+-    provData->pPDSip = calloc(1, sizeof(PROVDATA_SIP));
++    provData->pPDSip = WINTRUST_Alloc(sizeof(PROVDATA_SIP));
+     if (!provData->pPDSip)
+         goto oom;
+     provData->pPDSip->cbStruct = sizeof(PROVDATA_SIP);
+ 
+-    provData->psPfns = calloc(1, sizeof(CRYPT_PROVIDER_FUNCTIONS));
++    provData->psPfns = WINTRUST_Alloc(sizeof(CRYPT_PROVIDER_FUNCTIONS));
+     if (!provData->psPfns)
+         goto oom;
+     provData->psPfns->cbStruct = sizeof(CRYPT_PROVIDER_FUNCTIONS);
+@@ -206,10 +225,10 @@ static CRYPT_PROVIDER_DATA *WINTRUST_AllocateProviderData(void)
+ oom:
+     if (provData)
+     {
+-        free(provData->padwTrustStepErrors);
+-        free(provData->pPDSip);
+-        free(provData->psPfns);
+-        free(provData);
++        WINTRUST_Free(provData->padwTrustStepErrors);
++        WINTRUST_Free(provData->pPDSip);
++        WINTRUST_Free(provData->psPfns);
++        WINTRUST_Free(provData);
+     }
+     return NULL;
+ }
+@@ -287,10 +306,10 @@ static LONG WINTRUST_DefaultVerify(HWND hwnd, GUID *actionID,
+     goto done;
+ 
+ error:
+-    free(provData->padwTrustStepErrors);
+-    free(provData->pPDSip);
+-    free(provData->psPfns);
+-    free(provData);
++    WINTRUST_Free(provData->padwTrustStepErrors);
++    WINTRUST_Free(provData->pPDSip);
++    WINTRUST_Free(provData->psPfns);
++    WINTRUST_Free(provData);
+ 
+ done:
+     TRACE("returning %08lx\n", err);
+@@ -310,10 +329,10 @@ static LONG WINTRUST_DefaultClose(HWND hwnd, GUID *actionID,
+         if (provData->psPfns->pfnCleanupPolicy)
+             err = provData->psPfns->pfnCleanupPolicy(provData);
+ 
+-        free(provData->padwTrustStepErrors);
+-        free(provData->pPDSip);
+-        free(provData->psPfns);
+-        free(provData);
++        WINTRUST_Free(provData->padwTrustStepErrors);
++        WINTRUST_Free(provData->pPDSip);
++        WINTRUST_Free(provData->psPfns);
++        WINTRUST_Free(provData);
+         data->hWVTStateData = NULL;
+     }
+     TRACE("returning %08lx\n", err);
+@@ -475,10 +494,10 @@ static LONG WINTRUST_CertVerify(HWND hwnd, GUID *actionID,
+     goto done;
+ 
+ error:
+-    free(provData->padwTrustStepErrors);
+-    free(provData->pPDSip);
+-    free(provData->psPfns);
+-    free(provData);
++    WINTRUST_Free(provData->padwTrustStepErrors);
++    WINTRUST_Free(provData->pPDSip);
++    WINTRUST_Free(provData->psPfns);
++    WINTRUST_Free(provData);
+ 
+ done:
+     TRACE("returning %08lx\n", err);
+@@ -827,7 +846,7 @@ static BOOL WINAPI WINTRUST_enumUsages(PCCRYPT_OID_INFO pInfo, void *pvArg)
+     if (!*usages)
+     {
+         cUsages = 0;
+-        *usages = malloc(2 * sizeof(PCCRYPT_OID_INFO));
++        *usages = WINTRUST_Alloc(2 * sizeof(PCCRYPT_OID_INFO));
+     }
+     else
+     {
+@@ -838,7 +857,8 @@ static BOOL WINAPI WINTRUST_enumUsages(PCCRYPT_OID_INFO pInfo, void *pvArg)
+          */
+         for (cUsages = 0, ptr = *usages; *ptr; ptr++, cUsages++)
+             ;
+-        *usages = realloc(*usages, (cUsages + 2) * sizeof(PCCRYPT_OID_INFO));
++        *usages = WINTRUST_ReAlloc(*usages,
++         (cUsages + 2) * sizeof(PCCRYPT_OID_INFO));
+     }
+     if (*usages)
+     {
+@@ -890,7 +910,7 @@ BOOL WINAPI WTHelperGetKnownUsages(DWORD action, PCCRYPT_OID_INFO **usages)
+     }
+     else if (action == 2)
+     {
+-        free(*usages);
++        WINTRUST_Free(*usages);
+         *usages = NULL;
+         ret = TRUE;
+     }
+@@ -977,7 +997,14 @@ BOOL WINAPI WINTRUST_AddStore(CRYPT_PROVIDER_DATA *data, HCERTSTORE store)
+ 
+     TRACE("(%p, %p)\n", data, store);
+ 
+-    data->pahStores = realloc(data->pahStores, (data->chStores + 1) * sizeof(HCERTSTORE));
++    if (data->chStores)
++        data->pahStores = WINTRUST_ReAlloc(data->pahStores,
++         (data->chStores + 1) * sizeof(HCERTSTORE));
++    else
++    {
++        data->pahStores = WINTRUST_Alloc(sizeof(HCERTSTORE));
++        data->chStores = 0;
++    }
+     if (data->pahStores)
+     {
+         data->pahStores[data->chStores++] = CertDuplicateStore(store);
+@@ -1006,8 +1033,14 @@ BOOL WINAPI WINTRUST_AddSgnr(CRYPT_PROVIDER_DATA *data,
+         SetLastError(ERROR_INVALID_PARAMETER);
+         return FALSE;
+     }
+-    data->pasSigners = realloc(data->pasSigners,
+-     (data->csSigners + 1) * sizeof(CRYPT_PROVIDER_SGNR));
++    if (data->csSigners)
++        data->pasSigners = WINTRUST_ReAlloc(data->pasSigners,
++         (data->csSigners + 1) * sizeof(CRYPT_PROVIDER_SGNR));
++    else
++    {
++        data->pasSigners = WINTRUST_Alloc(sizeof(CRYPT_PROVIDER_SGNR));
++        data->csSigners = 0;
++    }
+     if (data->pasSigners)
+     {
+         if (idxSigner < data->csSigners)
+@@ -1049,10 +1082,17 @@ BOOL WINAPI WINTRUST_AddCert(CRYPT_PROVIDER_DATA *data, DWORD idxSigner,
+         SetLastError(ERROR_INVALID_PARAMETER);
+         return FALSE;
+     }
+-    data->pasSigners[idxSigner].pasCertChain =
+-     realloc(data->pasSigners[idxSigner].pasCertChain,
+-     (data->pasSigners[idxSigner].csCertChain + 1) *
+-     sizeof(CRYPT_PROVIDER_CERT));
++    if (data->pasSigners[idxSigner].csCertChain)
++        data->pasSigners[idxSigner].pasCertChain =
++         WINTRUST_ReAlloc(data->pasSigners[idxSigner].pasCertChain,
++         (data->pasSigners[idxSigner].csCertChain + 1) *
++         sizeof(CRYPT_PROVIDER_CERT));
++    else
++    {
++        data->pasSigners[idxSigner].pasCertChain =
++         WINTRUST_Alloc(sizeof(CRYPT_PROVIDER_CERT));
++        data->pasSigners[idxSigner].csCertChain = 0;
++    }
+     if (data->pasSigners[idxSigner].pasCertChain)
+     {
+         CRYPT_PROVIDER_CERT *cert = &data->pasSigners[idxSigner].pasCertChain[
+@@ -1081,8 +1121,14 @@ BOOL WINAPI WINTRUST_AddPrivData(CRYPT_PROVIDER_DATA *data,
+         WARN("invalid struct size\n");
+         return FALSE;
+     }
+-    data->pasProvPrivData = realloc(data->pasProvPrivData,
+-     (data->csProvPrivData + 1) * sizeof(*data->pasProvPrivData));
++    if (data->csProvPrivData)
++        data->pasProvPrivData = WINTRUST_ReAlloc(data->pasProvPrivData,
++         (data->csProvPrivData + 1) * sizeof(CRYPT_PROVIDER_SGNR));
++    else
++    {
++        data->pasProvPrivData = WINTRUST_Alloc(sizeof(CRYPT_PROVIDER_SGNR));
++        data->csProvPrivData = 0;
++    }
+     if (data->pasProvPrivData)
+     {
+         DWORD i;
+diff --git a/dlls/wintrust/wintrust_priv.h b/dlls/wintrust/wintrust_priv.h
+index 1e2e7a701f2..412512acf6e 100644
+--- a/dlls/wintrust/wintrust_priv.h
++++ b/dlls/wintrust/wintrust_priv.h
+@@ -18,6 +18,9 @@
+ #ifndef __WINTRUST_PRIV_H__
+ #define __WINTRUST_PRIV_H__
+ 
++void WINAPI WINTRUST_Free(void *p);
++void * WINAPI WINTRUST_Alloc(DWORD cb)
++ __WINE_ALLOC_SIZE(1) __WINE_DEALLOC(WINTRUST_Free) __WINE_MALLOC;
+ BOOL WINAPI WINTRUST_AddStore(CRYPT_PROVIDER_DATA *data, HCERTSTORE store);
+ BOOL WINAPI WINTRUST_AddSgnr(CRYPT_PROVIDER_DATA *data,
+  BOOL fCounterSigner, DWORD idxSigner, CRYPT_PROVIDER_SGNR *sgnr);
+-- 
+2.47.0
+
