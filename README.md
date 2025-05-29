@@ -71,8 +71,8 @@ ve\Externals\Test\build\LibOVRRT32_1.dll
 ovr_Initialize(0) returned -3003
 ```
 
-Under wine 9 and later, it now does an extra round of _WinVerifyTrust_ calls and then just returns without ever
-loading _LibOVRRT_32.dll_
+Under wine 9 and later, it now does an extra round of `WinVerifyTrust` calls and then just returns without ever
+loading `LibOVRRT_32.dll`
 ```
 ...
 Loading LibOVR.dll
@@ -104,9 +104,9 @@ ovr_Initialize(0) returned -3021
 
 # Culprit details
 
-It seems that something must have changed in the additional data returned by _WinVerifyTrust_.
+It seems that something must have changed in the additional data returned by `WinVerifyTrust`.
 
-The point at which things went bad was tracked down by bisecting all commits touching _dlls/wintrust_ since wine 8.
+The point at which things went bad was tracked down by bisecting all commits touching `dlls/wintrust` since wine 8.
 This identified [_wintrust: Use CRT allocation function_
 (6db69d0)](https://gitlab.winehq.org/wine/wine/-/commit/6db69d0), and this was fully confirmed by reverting just
 this commit in issolation in several later versions or wine, the most recent of which was 10.7.
@@ -135,7 +135,7 @@ which causes Windows to zero any added memory. The replacement calls to realloc,
 +    data->pasSigners = realloc(data->pasSigners,
 +     (data->csSigners + 1) * sizeof(CRYPT_PROVIDER_SGNR));
 ```
-will not be doing this. Likely this is introducing some garbage in a field and causing _LibOVR.dll_ to choke in its
+will not be doing this. Likely this is introducing some garbage in a field and causing `LibOVR.dll` to choke in its
 verification process.
 
 
