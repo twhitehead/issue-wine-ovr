@@ -1,0 +1,25 @@
+From 786ea67614510de1295efe737eb80be61d2af4d4 Mon Sep 17 00:00:00 2001
+From: Alex Henrie <alexhenrie24@gmail.com>
+Date: Wed, 28 May 2025 21:27:18 -0600
+Subject: [PATCH] wintrust: Initialize all cert fields in WINTRUST_AddCert.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=58293
+---
+ dlls/wintrust/wintrust_main.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/wintrust/wintrust_main.c b/dlls/wintrust/wintrust_main.c
+index 66e274a24ae..22921006d4a 100644
+--- a/dlls/wintrust/wintrust_main.c
++++ b/dlls/wintrust/wintrust_main.c
+@@ -1058,6 +1058,7 @@ BOOL WINAPI WINTRUST_AddCert(CRYPT_PROVIDER_DATA *data, DWORD idxSigner,
+         CRYPT_PROVIDER_CERT *cert = &data->pasSigners[idxSigner].pasCertChain[
+          data->pasSigners[idxSigner].csCertChain];
+ 
++        memset(cert, 0, sizeof(*cert));
+         cert->cbStruct = sizeof(CRYPT_PROVIDER_CERT);
+         cert->pCert = CertDuplicateCertificateContext(pCert2Add);
+         data->pasSigners[idxSigner].csCertChain++;
+-- 
+GitLab
+

@@ -8,9 +8,14 @@
       perSystem = { config, self', inputs', pkgs, system, ... }: {
         packages = {
           wineStock = pkgs.winePackages.unstable;
-          winePatched = self'.packages.wineStock.overrideAttrs (attrs: {
+          wineReverted = self'.packages.wineStock.overrideAttrs (attrs: {
             patches = attrs.patches or [] ++ [
               ./0001-Revert-wintrust-Use-CRT-allocation-functions.patch
+            ];
+          } );
+          winePatched = self'.packages.wineStock.overrideAttrs (attrs: {
+            patches = attrs.patches or [] ++ [
+              ./0001-wintrust-Initialize-all-cert-fields-in-WINTRUST_AddC.patch
             ];
           } );
           test = pkgs.pkgsCross.mingw32.callPackage (

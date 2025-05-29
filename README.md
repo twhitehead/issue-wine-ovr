@@ -5,6 +5,11 @@ wine 9 and later releases. The culprit is likely that [_wintrust: Use CRT alloca
 (6db69d0)](https://gitlab.winehq.org/wine/wine/-/commit/6db69d0) resulted in expanded memory areas not being
 cleared (`realloc` does not clear expanded memory while `WINTRUST_ReAlloc` did).
 
+This issue was reported in [bug report 58293](https://bugs.winehq.org/show_bug.cgi?id=58293) and quickly resolved
+by Alex Henrie. Includud in this repo is [his
+patch](0001-wintrust-Initialize-all-cert-fields-in-WINTRUST_AddC.patch) for testing any anyone neededing to
+backport it.
+
 
 # Issue details
 
@@ -142,9 +147,17 @@ Included in this repo are the
 * a short Windows program `test.c` that loads `LibOVR.dll` to demonstrate the problem, and
 * a conflict-resolved patch to revert commit 6db69d0 under wine 10.
 
-Also includud is a nix expression for building both the test program (`nix build .#test`),
-an unpatched (`nix shell .#wineStock`) and a patched (`nix shell .#winePatched`) 10.7 wine.
-A typical test session might look like
+
+# Nix
+
+Also included is a nix flake for building both the test program (`nix build .#test`)
+and various nixpkgs 10.7 wines. The nixpkgs wines are
+
+* nixpkgs stock wine 10.7 (`nix shell .#wineStock`)
+* nixpkgs stock wine 10.7 with 6db69d0 reverted (`nix shell .#wineReverted`)
+* nixpkgs stock wine 10.7 with Alex Henrie's patch (`nix shell .#winePatched`)
+
+An example of tesing the patch using this flake is
 ```
 nix build .#test -o test
 export WINEPREFIX=$(mktemp -d)
